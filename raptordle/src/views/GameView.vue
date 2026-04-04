@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue';
 import { getFeedback, isWinningFeedback } from '@/utils/game';
 import type { NBAPlayer } from '@/types/player';
 import type { GuessFeedback, FeedbackStatus } from '@/types/game';
@@ -21,6 +21,11 @@ const players = playersData as NBAPlayer[];
 const targetPlayer = ref(players[Math.floor(Math.random() * players.length)]);
 const revealPlayer = computed(() => gameOver.value);
 
+const elapsedSeconds = ref(0);
+let timerId: number | null = null;
+
+const copied = ref(false);
+
 const gameWon = computed(() => {
     return guessedRows.value.some((row) => isWinningFeedback(row.feedback));
 });
@@ -39,6 +44,68 @@ const guessedIds = computed(() => {
 
 const remainingGuesses = computed(() => {
     return Math.max(0, MAX_GUESSES - guessedRows.value.length);
+});
+
+onMounted(() => {
+    startTimer();
+});
+
+onBeforeUnmount(() => {
+    stopTimer();
+});
+
+watch(gameOver, (isOver) => {
+    if (isOver) {
+        stopTimer();
+    } else {
+        startTimer();
+    }
+});
+
+const startTimer = () => {
+    if (timerId !== null) return;
+
+    timerId = window.setInterval(() => {
+        if (!gameOver.value) {
+            elapsedSeconds.value += 1;
+        }
+    }, 1000);
+};
+
+const stopTimer = () => {
+    if (timerId !== null) {
+        window.clearInterval(timerId);
+        timerId = null;
+    }
+};
+
+const resetTimer = () => {
+    elapsedSeconds.value = 0;
+};
+
+const copyResults = async () => {
+    try {
+        await navigator.clipboard.writeText(shareText.value);
+        copied.value = true;
+
+        window.setTimeout(() => {
+            copied.value = false;
+        }, 1500);
+    } catch (error) {
+        console.error('Failed to copy results:', error);
+    }
+};
+
+const formattedTime = computed(() => {
+    const hours = Math.floor(elapsedSeconds.value / 3600);
+    const minutes = Math.floor((elapsedSeconds.value % 3600) / 60);
+    const seconds = elapsedSeconds.value % 60;
+
+    const hh = String(hours).padStart(2, '0');
+    const mm = String(minutes).padStart(2, '0');
+    const ss = String(seconds).padStart(2, '0');
+
+    return hours > 0 ? `${hh}:${mm}:${ss}` : `00:${mm}:${ss}`;
 });
 
 const getDirectionalHint = (guess: number | null, target: number | null): string => {
@@ -78,7 +145,7 @@ const statusMessage = computed(() => {
 const filteredPlayers = computed(() => {
     const trimmedQuery = query.value.trim().toLowerCase();
 
-    return playersData
+    return players
         .filter((player) => !guessedIds.value.has(player.id))
         .filter((player) => {
             if (!trimmedQuery || gameOver.value) return false;
@@ -115,6 +182,8 @@ const resetRound = () => {
     guessedRows.value = [];
     query.value = '';
     targetPlayer.value = getRandomPlayer(previousId);
+    resetTimer();
+    startTimer();
 };
 
 const formatHeight = (heightInches: number): string => {
@@ -128,6 +197,37 @@ const feedbackClass = (status: FeedbackStatus): string => {
     if (status === 'close') return 'is-close';
     return 'is-wrong';
 };
+
+const getShareEmoji = (status: FeedbackStatus): string => {
+    if (status === 'correct') return '🟩';
+    if (status === 'close') return '🟨';
+    return '⬛';
+};
+
+const buildGuessEmojiRow = (feedback: GuessFeedback): string => {
+    return [
+        getShareEmoji(feedback.team),
+        getShareEmoji(feedback.conference),
+        getShareEmoji(feedback.division),
+        getShareEmoji(feedback.position),
+        getShareEmoji(feedback.height),
+        getShareEmoji(feedback.age),
+        getShareEmoji(feedback.jersey)
+    ].join('');
+};
+
+const shareText = computed(() => {
+    const header = `${gameWon.value ? guessedRows.value.length : 'X'}/${MAX_GUESSES} | ${formattedTime.value}`;
+
+    const rows = guessedRows.value.map((row) => buildGuessEmojiRow(row.feedback));
+
+    return [
+        'Raptordle',
+        header,
+        '', // spacer line
+        ...rows
+    ].join('\n');
+});
 </script>
 
 <template>
@@ -138,17 +238,27 @@ const feedbackClass = (status: FeedbackStatus): string => {
 
         <div class="top-panel">
             <div class="top-stats">
+                <div class="pill">Time: {{ formattedTime }}</div>
                 <div class="pill">Guesses: {{ guessedRows.length }}/{{ MAX_GUESSES }}</div>
                 <div class="pill">Remaining: {{ remainingGuesses }}</div>
-                <div class="pill" v-if="gameWon">Win</div>
-                <div class="pill" v-else-if="gameLost">Loss</div>
+                <div class="pill" v-if="copied">✅ Results copied to clipboard.</div>
             </div>
 
-            <!-- For infinite plays -->
-            <button type="button" class="reset-button" @click="resetRound">Reset Round</button>
+            <div class="top-actions">
+                <button v-if="gameWon || gameLost" type="button" class="reset-button" @click="copyResults">
+                    Share Results
+                </button>
+
+                <!-- For infinite plays -->
+                <button type="button" class="reset-button" @click="resetRound">Reset Round</button>
+            </div>
         </div>
 
-        <div class="guess-section compact">
+        <div class="status-message" v-if="gameWon || gameLost">
+            {{ statusMessage }}
+        </div>
+
+        <div class="guess-section compact" v-else>
             <input
                 v-model="query"
                 class="guess-input"
@@ -168,10 +278,6 @@ const feedbackClass = (status: FeedbackStatus): string => {
                     {{ player.name }} — {{ player.team }} — {{ player.position }}
                 </button>
             </div>
-        </div>
-
-        <div class="status-message" v-if="gameWon || gameLost">
-            {{ statusMessage }}
         </div>
 
         <div class="guesses-section">
@@ -469,5 +575,11 @@ const feedbackClass = (status: FeedbackStatus): string => {
     padding: 10px 12px;
     border: 1px solid #e4e4e7;
     border-radius: 10px;
+}
+
+.top-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
 }
 </style>
