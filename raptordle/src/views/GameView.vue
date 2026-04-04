@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue';
 import { getFeedback, isWinningFeedback } from '@/utils/game';
+import { getDailyRandomPlayer, getMsUntilNextMidnightEST } from '@/utils/daily';
 import type { NBAPlayer } from '@/types/player';
 import type { GuessFeedback, FeedbackStatus } from '@/types/game';
 
@@ -18,11 +19,14 @@ const query = ref('');
 const guessedRows = ref<GuessRow[]>([]);
 
 const players = playersData as NBAPlayer[];
-const targetPlayer = ref(players[Math.floor(Math.random() * players.length)]);
+const daily = getDailyRandomPlayer(players);
+const targetPlayer = ref(daily.player);
+const currentDayKey = ref(daily.dayKey);
 const revealPlayer = computed(() => gameOver.value);
 
 const elapsedSeconds = ref(0);
 let timerId: number | null = null;
+let dailyTimeout: number | null = null;
 
 const copied = ref(false);
 
@@ -48,10 +52,15 @@ const remainingGuesses = computed(() => {
 
 onMounted(() => {
     startTimer();
+    scheduleNextRefresh();
 });
 
 onBeforeUnmount(() => {
     stopTimer();
+
+    if (dailyTimeout !== null) {
+        clearTimeout(dailyTimeout);
+    }
 });
 
 watch(gameOver, (isOver) => {
@@ -81,6 +90,31 @@ const stopTimer = () => {
 
 const resetTimer = () => {
     elapsedSeconds.value = 0;
+};
+
+const refreshDailyPlayer = () => {
+    const next = getDailyRandomPlayer(players);
+
+    if (next.dayKey !== currentDayKey.value) {
+        currentDayKey.value = next.dayKey;
+        targetPlayer.value = next.player;
+
+        guessedRows.value = [];
+        query.value = '';
+
+        resetTimer();
+        startTimer();
+    }
+
+    scheduleNextRefresh();
+};
+
+const scheduleNextRefresh = () => {
+    if (dailyTimeout !== null) {
+        clearTimeout(dailyTimeout);
+    }
+
+    dailyTimeout = window.setTimeout(refreshDailyPlayer, getMsUntilNextMidnightEST());
 };
 
 const copyResults = async () => {
@@ -119,24 +153,24 @@ const getJerseyDisplay = (player: NBAPlayer): string => {
 };
 
 const getHeightHint = (player: NBAPlayer): string => {
-    return getDirectionalHint(player.heightInches, targetPlayer.value.heightInches);
+    return getDirectionalHint(player.heightInches, targetPlayer.value!.heightInches);
 };
 
 const getAgeHint = (player: NBAPlayer): string => {
-    return getDirectionalHint(player.age, targetPlayer.value.age);
+    return getDirectionalHint(player.age, targetPlayer.value!.age);
 };
 
 const getJerseyHint = (player: NBAPlayer): string => {
-    return getDirectionalHint(player.jersey, targetPlayer.value.jersey);
+    return getDirectionalHint(player.jersey, targetPlayer.value!.jersey);
 };
 
 const statusMessage = computed(() => {
     if (gameWon.value) {
-        return `You got it! The hidden player is ${targetPlayer.value.name}.`;
+        return `You got it! The hidden player is ${targetPlayer.value!.name}.`;
     }
 
     if (gameLost.value) {
-        return `Out of guesses. The hidden player was ${targetPlayer.value.name}.`;
+        return `Out of guesses. The hidden player was ${targetPlayer.value!.name}.`;
     }
 
     return `${remainingGuesses.value} guesses remaining.`;
@@ -159,32 +193,32 @@ const submitGuess = (player: NBAPlayer) => {
 
     guessedRows.value.push({
         player,
-        feedback: getFeedback(player, targetPlayer.value)
+        feedback: getFeedback(player, targetPlayer.value!)
     });
 
     query.value = '';
 };
 
-const getRandomPlayer = (excludeId?: string): NBAPlayer => {
-    if (players.length === 1) return players[0];
+// const getRandomPlayer = (excludeId?: string): NBAPlayer => {
+//     if (players.length === 1) return players[0];
 
-    let nextPlayer = players[Math.floor(Math.random() * players.length)];
+//     let nextPlayer = players[Math.floor(Math.random() * players.length)];
 
-    while (excludeId && nextPlayer.id === excludeId) {
-        nextPlayer = players[Math.floor(Math.random() * players.length)];
-    }
+//     while (excludeId && nextPlayer.id === excludeId) {
+//         nextPlayer = players[Math.floor(Math.random() * players.length)];
+//     }
 
-    return nextPlayer;
-};
+//     return nextPlayer;
+// };
 
-const resetRound = () => {
-    const previousId = targetPlayer.value.id;
-    guessedRows.value = [];
-    query.value = '';
-    targetPlayer.value = getRandomPlayer(previousId);
-    resetTimer();
-    startTimer();
-};
+// const resetRound = () => {
+//     const previousId = targetPlayer.value.id;
+//     guessedRows.value = [];
+//     query.value = '';
+//     targetPlayer.value = getRandomPlayer(previousId);
+//     resetTimer();
+//     startTimer();
+// };
 
 const formatHeight = (heightInches: number): string => {
     const feet = Math.floor(heightInches / 12);
@@ -234,10 +268,11 @@ const shareText = computed(() => {
     <div class="game-container">
         <h1>Raptordle</h1>
 
-        <HiddenPlayerCard :image-url="targetPlayer.imageUrl" :revealed="revealPlayer" />
+        <HiddenPlayerCard :image-url="targetPlayer!.imageUrl" :revealed="revealPlayer" />
 
         <div class="top-panel">
             <div class="top-stats">
+                <div class="pill">{{ currentDayKey }}</div>
                 <div class="pill">Time: {{ formattedTime }}</div>
                 <div class="pill">Guesses: {{ guessedRows.length }}/{{ MAX_GUESSES }}</div>
                 <div class="pill">Remaining: {{ remainingGuesses }}</div>
@@ -250,7 +285,7 @@ const shareText = computed(() => {
                 </button>
 
                 <!-- For infinite plays -->
-                <button type="button" class="reset-button" @click="resetRound">Reset Round</button>
+                <!-- <button type="button" class="reset-button" @click="resetRound">Reset Round</button> -->
             </div>
         </div>
 
