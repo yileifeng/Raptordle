@@ -13,6 +13,13 @@ type GuessRow = {
     feedback: GuessFeedback;
 };
 
+type DailyStats = {
+    dayKey: string;
+    winsByGuessCount: Record<number, number>;
+    totalWins: number;
+    totalGuessesUsedInWins: number;
+};
+
 const MAX_GUESSES = 8;
 
 const query = ref('');
@@ -23,6 +30,83 @@ const daily = getDailyRandomPlayer(players);
 const targetPlayer = ref(daily.player);
 const currentDayKey = ref(daily.dayKey);
 const revealPlayer = computed(() => gameOver.value);
+
+const dailyStats = ref<DailyStats>({
+    dayKey: currentDayKey.value,
+    winsByGuessCount: {
+        1: 0,
+        2: 0,
+        3: 0,
+        4: 0,
+        5: 0,
+        6: 0,
+        7: 0,
+        8: 0
+    },
+    totalWins: 0,
+    totalGuessesUsedInWins: 0
+});
+
+const hasRecordedCurrentWin = ref(false);
+const statsStorageKey = computed(() => `raptordle-stats:${currentDayKey.value}`);
+const averageGuessesUsed = computed(() => {
+    if (dailyStats.value.totalWins === 0) return '—';
+    return (dailyStats.value.totalGuessesUsedInWins / dailyStats.value.totalWins).toFixed(2);
+});
+
+const getConferenceShort = (conference: string) => {
+    return conference === 'East' ? 'E' : 'W';
+};
+
+const getDivisionShort = (division: string) => {
+    const map: Record<string, string> = {
+        Atlantic: 'Atl',
+        Central: 'Cen',
+        Southeast: 'SE',
+        Pacific: 'Pac',
+        Northwest: 'NW',
+        Southwest: 'SW'
+    };
+
+    return map[division] ?? division;
+};
+
+const getTeamShort = (team: string) => {
+    const map: Record<string, string> = {
+        Celtics: 'BOS',
+        Nets: 'BKN',
+        Knicks: 'NYK',
+        Sixers: 'PHI',
+        Raptors: 'TOR',
+        Bulls: 'CHI',
+        Cavaliers: 'CLE',
+        Pistons: 'DET',
+        Pacers: 'IND',
+        Bucks: 'MIL',
+        Hawks: 'ATL',
+        Hornets: 'CHA',
+        Heat: 'MIA',
+        Magic: 'ORL',
+        Wizards: 'WAS',
+        Nuggets: 'DEN',
+        Timberwolves: 'MIN',
+        Thunder: 'OKC',
+        'Trail Blazers': 'POR',
+        Jazz: 'UTA',
+        Warriors: 'GSW',
+        Clippers: 'LAC',
+        Lakers: 'LAL',
+        Suns: 'PHX',
+        Kings: 'SAC',
+        Mavericks: 'DAL',
+        Rockets: 'HOU',
+        Grizzlies: 'MEM',
+        Pelicans: 'NOP',
+        Spurs: 'SAS'
+    };
+
+    return map[team] ?? team;
+};
 
 const elapsedSeconds = ref(0);
 let timerId: number | null = null;
@@ -51,6 +135,7 @@ const remainingGuesses = computed(() => {
 });
 
 onMounted(() => {
+    loadDailyStats();
     startTimer();
     scheduleNextRefresh();
 });
@@ -68,6 +153,12 @@ watch(gameOver, (isOver) => {
         stopTimer();
     } else {
         startTimer();
+    }
+});
+
+watch(gameWon, (won) => {
+    if (won) {
+        recordWinInStats();
     }
 });
 
@@ -93,6 +184,9 @@ const resetTimer = () => {
 };
 
 const refreshDailyPlayer = () => {
+    hasRecordedCurrentWin.value = false;
+    loadDailyStats();
+
     const next = getDailyRandomPlayer(players);
 
     if (next.dayKey !== currentDayKey.value) {
@@ -142,6 +236,25 @@ const formattedTime = computed(() => {
     return hours > 0 ? `${hh}:${mm}:${ss}` : `00:${mm}:${ss}`;
 });
 
+const statsChartData = computed(() => {
+    const entries = Array.from({ length: 8 }, (_, index) => {
+        const guessCount = index + 1;
+        const value = dailyStats.value.winsByGuessCount[guessCount] ?? 0;
+
+        return {
+            guessCount,
+            value
+        };
+    });
+
+    const maxValue = Math.max(...entries.map((entry) => entry.value), 1);
+
+    return entries.map((entry) => ({
+        ...entry,
+        widthPercent: entry.value === 0 ? 0 : (entry.value / maxValue) * 100
+    }));
+});
+
 const getDirectionalHint = (guess: number | null, target: number | null): string => {
     if (guess == null || target == null) return '';
     if (guess === target) return '✓';
@@ -162,6 +275,61 @@ const getAgeHint = (player: NBAPlayer): string => {
 
 const getJerseyHint = (player: NBAPlayer): string => {
     return getDirectionalHint(player.jersey, targetPlayer.value!.jersey);
+};
+
+const createEmptyDailyStats = (dayKey: string): DailyStats => ({
+    dayKey,
+    winsByGuessCount: {
+        1: 0,
+        2: 0,
+        3: 0,
+        4: 0,
+        5: 0,
+        6: 0,
+        7: 0,
+        8: 0
+    },
+    totalWins: 0,
+    totalGuessesUsedInWins: 0
+});
+
+const loadDailyStats = () => {
+    const raw = sessionStorage.getItem(statsStorageKey.value);
+
+    if (!raw) {
+        dailyStats.value = createEmptyDailyStats(currentDayKey.value);
+        return;
+    }
+
+    try {
+        const parsed = JSON.parse(raw) as DailyStats;
+        if (parsed.dayKey !== currentDayKey.value) {
+            dailyStats.value = createEmptyDailyStats(currentDayKey.value);
+            return;
+        }
+
+        dailyStats.value = parsed;
+    } catch {
+        dailyStats.value = createEmptyDailyStats(currentDayKey.value);
+    }
+};
+
+const saveDailyStats = () => {
+    sessionStorage.setItem(statsStorageKey.value, JSON.stringify(dailyStats.value));
+};
+
+const recordWinInStats = () => {
+    if (!gameWon.value || hasRecordedCurrentWin.value) return;
+
+    const guessesUsed = guessedRows.value.length;
+    if (guessesUsed < 1 || guessesUsed > MAX_GUESSES) return;
+
+    dailyStats.value.winsByGuessCount[guessesUsed]! += 1;
+    dailyStats.value.totalWins += 1;
+    dailyStats.value.totalGuessesUsedInWins += guessesUsed;
+
+    hasRecordedCurrentWin.value = true;
+    saveDailyStats();
 };
 
 const statusMessage = computed(() => {
@@ -291,6 +459,34 @@ const shareText = computed(() => {
 
         <div class="status-message" v-if="gameWon || gameLost">
             {{ statusMessage }}
+            <div class="stats-panel">
+                <h2>Daily Stats</h2>
+
+                <div class="stats-summary">
+                    <div class="pill">Wins: {{ dailyStats.totalWins }}</div>
+                    <div class="pill">Avg Guesses: {{ averageGuessesUsed }}</div>
+                </div>
+
+                <div class="stats-chart">
+                    <div v-for="item in statsChartData" :key="item.guessCount" class="stats-chart-row">
+                        <div class="stats-chart-label">
+                            {{ item.guessCount }}
+                        </div>
+
+                        <div class="stats-chart-bar-wrap">
+                            <div class="stats-chart-bar" :style="{ width: `${item.widthPercent}%` }">
+                                <span v-if="item.value > 0" class="stats-chart-value">
+                                    {{ item.value }}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="stats-chart-count">
+                            {{ item.value }}
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="guess-section compact" v-else>
@@ -310,7 +506,7 @@ const shareText = computed(() => {
                     type="button"
                     @click="submitGuess(player)"
                 >
-                    {{ player.name }} — {{ player.team }} — {{ player.position }}
+                    {{ player.name }}
                 </button>
             </div>
         </div>
@@ -324,13 +520,13 @@ const shareText = computed(() => {
                 <div class="guess-table">
                     <div class="guess-row guess-header">
                         <div class="guess-cell name-col">Player</div>
-                        <div class="guess-cell">Team</div>
+                        <div class="guess-cell">Tm</div>
                         <div class="guess-cell">Conf</div>
-                        <div class="guess-cell">Division</div>
+                        <div class="guess-cell">Div</div>
                         <div class="guess-cell">Pos</div>
-                        <div class="guess-cell">Height</div>
+                        <div class="guess-cell">Ht</div>
                         <div class="guess-cell">Age</div>
-                        <div class="guess-cell">Jersey</div>
+                        <div class="guess-cell">#</div>
                     </div>
 
                     <div v-for="row in guessedRows" :key="row.player.id" class="guess-row">
@@ -340,17 +536,17 @@ const shareText = computed(() => {
 
                         <div class="guess-cell" :class="feedbackClass(row.feedback.team)">
                             <span class="cell-label">Team</span>
-                            <span>{{ row.player.team }}</span>
+                            <span>{{ getTeamShort(row.player.team) }}</span>
                         </div>
 
                         <div class="guess-cell" :class="feedbackClass(row.feedback.conference)">
                             <span class="cell-label">Conf</span>
-                            <span>{{ row.player.conference }}</span>
+                            <span>{{ getConferenceShort(row.player.conference) }}</span>
                         </div>
 
                         <div class="guess-cell" :class="feedbackClass(row.feedback.division)">
-                            <span class="cell-label">Division</span>
-                            <span>{{ row.player.division }}</span>
+                            <span class="cell-label">Div</span>
+                            <span>{{ getDivisionShort(row.player.division) }}</span>
                         </div>
 
                         <div class="guess-cell" :class="feedbackClass(row.feedback.position)">
@@ -359,7 +555,7 @@ const shareText = computed(() => {
                         </div>
 
                         <div class="guess-cell" :class="feedbackClass(row.feedback.height)">
-                            <span class="cell-label">Height</span>
+                            <span class="cell-label">Ht</span>
                             <span>
                                 {{ formatHeight(row.player.heightInches) }}
                                 {{ row.feedback.height === 'correct' ? '✓' : getHeightHint(row.player) }}
@@ -375,7 +571,7 @@ const shareText = computed(() => {
                         </div>
 
                         <div class="guess-cell" :class="feedbackClass(row.feedback.jersey)">
-                            <span class="cell-label">Jersey</span>
+                            <span class="cell-label">#</span>
                             <span>
                                 {{ getJerseyDisplay(row.player) }}
                                 {{ row.feedback.jersey === 'correct' ? '✓' : getJerseyHint(row.player) }}
@@ -406,9 +602,11 @@ const shareText = computed(() => {
 }
 
 .guess-section.compact {
+    width: 100%;
     max-width: 900px;
     margin: 14px auto 0;
     position: relative;
+    box-sizing: border-box;
 }
 
 .status-message {
@@ -422,8 +620,11 @@ const shareText = computed(() => {
 }
 
 .game-container {
+    width: 100%;
     max-width: 900px;
     margin: 40px auto;
+    padding: 0 12px;
+    box-sizing: border-box;
     text-align: center;
 }
 
@@ -454,6 +655,8 @@ const shareText = computed(() => {
 
 .guess-input {
     width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
     padding: 12px 14px;
     font-size: 16px;
     border: 1px solid #d4d4d8;
@@ -519,15 +722,17 @@ const shareText = computed(() => {
     border: 1px solid #d4d4d8;
     border-radius: 14px;
     background: white;
+    overflow-x: hidden;
 }
 
 .guess-table {
-    min-width: 980px;
+    width: 100%;
+    min-width: 0;
 }
 
 .guess-row {
     display: grid;
-    grid-template-columns: 190px repeat(7, minmax(90px, 1fr));
+    grid-template-columns: 1.8fr repeat(7, 1fr);
     border-bottom: 1px solid #e4e4e7;
 }
 
@@ -541,13 +746,16 @@ const shareText = computed(() => {
 }
 
 .guess-cell {
-    padding: 10px 12px;
+    padding: 8px 6px;
     border-right: 1px solid #e4e4e7;
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 4px;
-    min-height: 58px;
+    gap: 2px;
+    min-height: 48px;
+    font-size: 13px;
+    text-align: center;
+    word-break: break-word;
 }
 
 .guess-cell:last-child {
@@ -557,14 +765,16 @@ const shareText = computed(() => {
 .name-col {
     font-weight: 600;
     background: #fafafa;
+    font-size: 12px;
 }
 
 .player-name-cell {
     justify-content: center;
+    line-height: 1.1;
 }
 
 .cell-label {
-    font-size: 11px;
+    font-size: 9px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: #71717a;
@@ -616,5 +826,187 @@ const shareText = computed(() => {
     display: flex;
     gap: 10px;
     flex-wrap: wrap;
+}
+
+.stats-panel {
+    max-width: 900px;
+    margin: 20px auto 0;
+    text-align: left;
+}
+
+.stats-summary {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+}
+
+.stats-chart {
+    display: grid;
+    gap: 8px;
+}
+
+.stats-chart-row {
+    display: grid;
+    grid-template-columns: 28px 1fr 36px;
+    align-items: center;
+    gap: 8px;
+}
+
+.stats-chart-label {
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+}
+
+.stats-chart-bar-wrap {
+    height: 28px;
+    background: #f4f4f5;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid #e4e4e7;
+}
+
+.stats-chart-bar {
+    height: 100%;
+    min-width: 0;
+    background: #86efac;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0 8px;
+    box-sizing: border-box;
+    transition: width 0.25s ease;
+}
+
+.stats-chart-value {
+    font-size: 12px;
+    font-weight: 700;
+    color: #14532d;
+}
+
+.stats-chart-count {
+    font-size: 13px;
+    text-align: right;
+    color: #52525b;
+}
+
+@media (max-width: 640px) {
+    .player-name-cell {
+        font-size: 10px;
+    }
+
+    .game-container {
+        margin: 20px auto;
+        padding: 0 8px;
+    }
+
+    .guess-section.compact {
+        width: 100%;
+        max-width: 100%;
+    }
+
+    .guess-row {
+        grid-template-columns: 1.6fr repeat(7, 0.8fr);
+    }
+
+    .guess-cell {
+        padding: 6px 4px;
+        font-size: 12px;
+        min-height: 42px;
+    }
+
+    .name-col {
+        font-size: 12px;
+    }
+
+    .guess-input {
+        width: 100%;
+        max-width: 100%;
+        font-size: 15px;
+        padding: 10px 12px;
+    }
+
+    .pill {
+        padding: 6px 10px;
+        font-size: 12px;
+    }
+
+    .cell-label {
+        display: none;
+    }
+
+    .results-list {
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+    .result-item {
+        padding: 10px 12px;
+        font-size: 14px;
+    }
+
+    .stats-panel {
+        max-width: 900px;
+        margin: 20px auto 0;
+        text-align: left;
+    }
+
+    .stats-summary {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 14px;
+    }
+
+    .stats-chart {
+        display: grid;
+        gap: 8px;
+    }
+
+    .stats-chart-row {
+        display: grid;
+        grid-template-columns: 28px 1fr 36px;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .stats-chart-label {
+        font-size: 13px;
+        font-weight: 600;
+        text-align: center;
+    }
+
+    .stats-chart-bar-wrap {
+        height: 28px;
+        background: #f4f4f5;
+        border-radius: 8px;
+        overflow: hidden;
+        border: 1px solid #e4e4e7;
+    }
+
+    .stats-chart-bar {
+        height: 100%;
+        min-width: 0;
+        background: #86efac;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        padding: 0 8px;
+        box-sizing: border-box;
+        transition: width 0.25s ease;
+    }
+
+    .stats-chart-value {
+        font-size: 12px;
+        font-weight: 700;
+        color: #14532d;
+    }
+
+    .stats-chart-count {
+        font-size: 13px;
+        text-align: right;
+        color: #52525b;
+    }
 }
 </style>
