@@ -47,5 +47,12 @@ export function getFeedback(guess: NBAPlayer, target: NBAPlayer): GuessFeedback 
 }
 
 export function isWinningFeedback(feedback: GuessFeedback): boolean {
-    return Object.values(feedback).every((value) => value === 'correct');
+    return (
+        feedback.team === 'correct' &&
+        feedback.conference === 'correct' &&
+        feedback.division === 'correct' &&
+        feedback.position === 'correct' &&
+        feedback.height === 'correct' &&
+        feedback.age === 'correct'
+    );
 }
