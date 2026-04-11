@@ -8,7 +8,16 @@ defineProps<{
 <template>
     <div class="hidden-player-card">
         <div class="image-frame">
-            <img v-if="imageUrl" :src="imageUrl" alt="Hidden NBA player" class="player-image" :class="{ revealed }" />
+            <img
+                v-if="imageUrl"
+                :src="imageUrl"
+                alt="Hidden NBA player"
+                class="player-image"
+                :class="{ revealed }"
+                draggable="false"
+                @dragstart.prevent
+                @contextmenu.prevent
+            />
             <div v-else class="fallback-shape" />
         </div>
     </div>
@@ -39,6 +48,12 @@ defineProps<{
     transition:
         filter 0.25s ease,
         transform 0.25s ease;
+
+    -webkit-user-drag: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    pointer-events: none;
 }
 
 .player-image.revealed {
