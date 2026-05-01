@@ -14,7 +14,6 @@ type GuessRow = {
 };
 
 type DailyStats = {
-    dayKey: string;
     winsByGuessCount: Record<number, number>;
     totalWins: number;
     totalGuessesUsedInWins: number;
@@ -31,8 +30,7 @@ const targetPlayer = ref(daily.player);
 const currentDayKey = ref(daily.dayKey);
 const revealPlayer = computed(() => gameOver.value);
 
-const dailyStats = ref<DailyStats>({
-    dayKey: currentDayKey.value,
+const createEmptyDailyStats = () => ({
     winsByGuessCount: {
         1: 0,
         2: 0,
@@ -46,8 +44,9 @@ const dailyStats = ref<DailyStats>({
     totalWins: 0,
     totalGuessesUsedInWins: 0
 });
-
+const dailyStats = ref<DailyStats>(createEmptyDailyStats());
 const hasRecordedCurrentWin = ref(false);
+
 const statsStorageKey = computed(() => `raptordle-stats:${currentDayKey.value}`);
 const averageGuessesUsed = computed(() => {
     if (dailyStats.value.totalWins === 0) return '—';
@@ -277,41 +276,15 @@ const getJerseyHint = (player: NBAPlayer): string => {
     return getDirectionalHint(player.jersey, targetPlayer.value!.jersey);
 };
 
-const createEmptyDailyStats = (dayKey: string): DailyStats => ({
-    dayKey,
-    winsByGuessCount: {
-        1: 0,
-        2: 0,
-        3: 0,
-        4: 0,
-        5: 0,
-        6: 0,
-        7: 0,
-        8: 0
-    },
-    totalWins: 0,
-    totalGuessesUsedInWins: 0
-});
-
 const loadDailyStats = () => {
     const raw = sessionStorage.getItem(statsStorageKey.value);
 
     if (!raw) {
-        dailyStats.value = createEmptyDailyStats(currentDayKey.value);
+        dailyStats.value = createEmptyDailyStats();
         return;
     }
 
-    try {
-        const parsed = JSON.parse(raw) as DailyStats;
-        if (parsed.dayKey !== currentDayKey.value) {
-            dailyStats.value = createEmptyDailyStats(currentDayKey.value);
-            return;
-        }
-
-        dailyStats.value = parsed;
-    } catch {
-        dailyStats.value = createEmptyDailyStats(currentDayKey.value);
-    }
+    dailyStats.value = JSON.parse(raw);
 };
 
 const saveDailyStats = () => {
@@ -319,12 +292,11 @@ const saveDailyStats = () => {
 };
 
 const recordWinInStats = () => {
-    if (!gameWon.value || hasRecordedCurrentWin.value) return;
+    if (hasRecordedCurrentWin.value) return;
 
     const guessesUsed = guessedRows.value.length;
-    if (guessesUsed < 1 || guessesUsed > MAX_GUESSES) return;
 
-    dailyStats.value.winsByGuessCount[guessesUsed]! += 1;
+    dailyStats.value.winsByGuessCount[guessesUsed] += 1;
     dailyStats.value.totalWins += 1;
     dailyStats.value.totalGuessesUsedInWins += guessesUsed;
 
