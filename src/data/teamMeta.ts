@@ -26,7 +26,7 @@ export const TEAM_META: Record<string, TeamMeta> = {
     Knicks: { conference: 'East', division: 'Atlantic' },
     Thunder: { conference: 'West', division: 'Northwest' },
     Magic: { conference: 'East', division: 'Southeast' },
-    Sixers: { conference: 'East', division: 'Atlantic' },
+    '76ers': { conference: 'East', division: 'Atlantic' },
     Suns: { conference: 'West', division: 'Pacific' },
     'Trail Blazers': { conference: 'West', division: 'Northwest' },
     Kings: { conference: 'West', division: 'Pacific' },

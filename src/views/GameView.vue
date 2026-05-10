@@ -13,7 +13,15 @@ type GuessRow = {
     feedback: GuessFeedback;
 };
 
-type DailyStats = {
+type SavedGameState = {
+    dayKey: string;
+    guessedPlayerIds: string[];
+    elapsedSeconds: number;
+    completed: boolean;
+};
+
+type LifetimeStats = {
+    completedDayKeys: string[];
     winsByGuessCount: Record<number, number>;
     totalWins: number;
     totalGuessesUsedInWins: number;
@@ -30,7 +38,8 @@ const targetPlayer = ref(daily.player);
 const currentDayKey = ref(daily.dayKey);
 const revealPlayer = computed(() => gameOver.value);
 
-const createEmptyDailyStats = () => ({
+const createEmptyStats = (): LifetimeStats => ({
+    completedDayKeys: [],
     winsByGuessCount: {
         1: 0,
         2: 0,
@@ -44,14 +53,16 @@ const createEmptyDailyStats = () => ({
     totalWins: 0,
     totalGuessesUsedInWins: 0
 });
-const dailyStats = ref<DailyStats>(createEmptyDailyStats());
-const hasRecordedCurrentWin = ref(false);
 
-const statsStorageKey = computed(() => `raptordle-stats:${currentDayKey.value}`);
+const stats = ref<LifetimeStats>(createEmptyStats());
+
 const averageGuessesUsed = computed(() => {
-    if (dailyStats.value.totalWins === 0) return '—';
-    return (dailyStats.value.totalGuessesUsedInWins / dailyStats.value.totalWins).toFixed(2);
+    if (stats.value.totalWins === 0) return '—';
+    return (stats.value.totalGuessesUsedInWins / stats.value.totalWins).toFixed(2);
 });
+
+const gameStorageKey = computed(() => `raptordle-game:${currentDayKey.value}`);
+const statsStorageKey = 'raptordle-stats';
 
 const getConferenceShort = (conference: string) => {
     return conference === 'East' ? 'E' : 'W';
@@ -75,7 +86,7 @@ const getTeamShort = (team: string) => {
         Celtics: 'BOS',
         Nets: 'BKN',
         Knicks: 'NYK',
-        Sixers: 'PHI',
+        '76ers': 'PHI',
         Raptors: 'TOR',
         Bulls: 'CHI',
         Cavaliers: 'CLE',
@@ -134,8 +145,13 @@ const remainingGuesses = computed(() => {
 });
 
 onMounted(() => {
-    loadDailyStats();
-    startTimer();
+    loadStats();
+    loadGameState();
+
+    if (!gameOver.value) {
+        startTimer();
+    }
+
     scheduleNextRefresh();
 });
 
@@ -147,17 +163,31 @@ onBeforeUnmount(() => {
     }
 });
 
-watch(gameOver, (isOver) => {
-    if (isOver) {
-        stopTimer();
-    } else {
-        startTimer();
-    }
-});
+watch(
+    [guessedRows, elapsedSeconds],
+    () => {
+        saveGameState();
+    },
+    { deep: true }
+);
 
 watch(gameWon, (won) => {
     if (won) {
         recordWinInStats();
+        saveGameState();
+    }
+});
+
+watch(gameLost, (lost) => {
+    if (lost) {
+        saveGameState();
+    }
+});
+
+watch(gameOver, (over) => {
+    if (over) {
+        stopTimer();
+        saveGameState();
     }
 });
 
@@ -183,8 +213,7 @@ const resetTimer = () => {
 };
 
 const refreshDailyPlayer = () => {
-    hasRecordedCurrentWin.value = false;
-    loadDailyStats();
+    loadStats();
 
     const next = getDailyRandomPlayer(players);
 
@@ -238,7 +267,7 @@ const formattedTime = computed(() => {
 const statsChartData = computed(() => {
     const entries = Array.from({ length: 8 }, (_, index) => {
         const guessCount = index + 1;
-        const value = dailyStats.value.winsByGuessCount[guessCount] ?? 0;
+        const value = stats.value.winsByGuessCount[guessCount] ?? 0;
 
         return {
             guessCount,
@@ -276,32 +305,70 @@ const getJerseyHint = (player: NBAPlayer): string => {
     return getDirectionalHint(player.jersey, targetPlayer.value!.jersey);
 };
 
-const loadDailyStats = () => {
-    const raw = sessionStorage.getItem(statsStorageKey.value);
+const loadStats = () => {
+    const raw = localStorage.getItem(statsStorageKey);
 
     if (!raw) {
-        dailyStats.value = createEmptyDailyStats();
+        stats.value = createEmptyStats();
         return;
     }
 
-    dailyStats.value = JSON.parse(raw);
+    try {
+        stats.value = JSON.parse(raw) as LifetimeStats;
+    } catch {
+        stats.value = createEmptyStats();
+    }
 };
 
-const saveDailyStats = () => {
-    sessionStorage.setItem(statsStorageKey.value, JSON.stringify(dailyStats.value));
+const saveStats = () => {
+    localStorage.setItem(statsStorageKey, JSON.stringify(stats.value));
+};
+
+const saveGameState = () => {
+    const state: SavedGameState = {
+        dayKey: currentDayKey.value,
+        guessedPlayerIds: guessedRows.value.map((row) => row.player.id),
+        elapsedSeconds: elapsedSeconds.value,
+        completed: gameOver.value
+    };
+
+    localStorage.setItem(gameStorageKey.value, JSON.stringify(state));
+};
+
+const loadGameState = () => {
+    const raw = localStorage.getItem(gameStorageKey.value);
+    if (!raw) return;
+
+    try {
+        const parsed = JSON.parse(raw) as SavedGameState;
+        if (parsed.dayKey !== currentDayKey.value) return;
+
+        guessedRows.value = parsed.guessedPlayerIds
+            .map((id) => players.find((player) => player.id === id))
+            .filter((player): player is NBAPlayer => Boolean(player))
+            .map((player) => ({
+                player,
+                feedback: getFeedback(player, targetPlayer.value as NBAPlayer)
+            }));
+
+        elapsedSeconds.value = parsed.elapsedSeconds ?? 0;
+    } catch {
+        localStorage.removeItem(gameStorageKey.value);
+    }
 };
 
 const recordWinInStats = () => {
-    if (hasRecordedCurrentWin.value) return;
+    if (!gameWon.value) return;
+    if (stats.value.completedDayKeys.includes(currentDayKey.value)) return;
 
     const guessesUsed = guessedRows.value.length;
 
-    dailyStats.value.winsByGuessCount[guessesUsed] += 1;
-    dailyStats.value.totalWins += 1;
-    dailyStats.value.totalGuessesUsedInWins += guessesUsed;
+    stats.value.completedDayKeys.push(currentDayKey.value);
+    stats.value.winsByGuessCount[guessesUsed]! += 1;
+    stats.value.totalWins += 1;
+    stats.value.totalGuessesUsedInWins += guessesUsed;
 
-    hasRecordedCurrentWin.value = true;
-    saveDailyStats();
+    saveStats();
 };
 
 const statusMessage = computed(() => {
@@ -435,7 +502,7 @@ const shareText = computed(() => {
                 <h2>Daily Stats</h2>
 
                 <div class="stats-summary">
-                    <div class="pill">Wins: {{ dailyStats.totalWins }}</div>
+                    <div class="pill">Wins: {{ stats.totalWins }}</div>
                     <div class="pill">Avg Guesses: {{ averageGuessesUsed }}</div>
                 </div>
 
@@ -470,7 +537,7 @@ const shareText = computed(() => {
                 :disabled="gameOver"
             />
 
-            <div v-if="filteredPlayers.length > 0" class="results-list">
+            <div v-if="query.trim() && !gameOver" class="results-list">
                 <button
                     v-for="player in filteredPlayers"
                     :key="player.id"
@@ -480,6 +547,8 @@ const shareText = computed(() => {
                 >
                     {{ player.name }}
                 </button>
+
+                <div v-if="filteredPlayers.length === 0" class="result-item no-result">No players found</div>
             </div>
         </div>
 
@@ -646,23 +715,39 @@ const shareText = computed(() => {
 }
 
 .results-list {
-    margin-top: 8px;
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    right: 0;
+    z-index: 20;
+
+    max-height: 260px;
+    min-height: 48px;
+    overflow-y: auto;
+
     border: 1px solid #d4d4d8;
     border-radius: 10px;
-    overflow: hidden;
     background: white;
     text-align: left;
+    box-sizing: border-box;
 }
 
 .result-item {
     display: block;
     width: 100%;
-    padding: 12px 14px;
+    min-height: 44px;
+    padding: 10px 12px;
     border: none;
     background: white;
     text-align: left;
     cursor: pointer;
-    font-size: 15px;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+.no-result {
+    color: #71717a;
+    cursor: default;
 }
 
 .result-item:hover {
@@ -874,6 +959,7 @@ const shareText = computed(() => {
     }
 
     .guess-section.compact {
+        position: relative;
         width: 100%;
         max-width: 100%;
     }
