@@ -4,7 +4,14 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
-from nba_api.stats.endpoints import commonallplayers, commonplayerinfo
+from nba_api.stats.endpoints import commonteamroster
+from nba_api.stats.library.http import STATS_HEADERS
+from nba_api.stats.static import teams as nba_teams
+
+NBA_API_HEADERS = STATS_HEADERS.copy()
+NBA_API_TIMEOUT_SECONDS = 90
+NBA_API_RETRIES = 3
+NBA_API_RETRY_DELAY_SECONDS = 3
 
 TEAM_META = {
     "Hawks": {"conference": "East", "division": "Southeast"},
@@ -58,6 +65,10 @@ def parse_age(birthdate: str | None) -> int | None:
     today = date.today()
     return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
 
+def parse_jersey(jersey: object) -> int | None:
+    jersey_raw = str(jersey or "").strip()
+    return int(jersey_raw) if jersey_raw.isdigit() else None
+
 def normalize_position(position: str) -> str:
     value = (position or "").strip().upper()
     if not value:
@@ -75,45 +86,60 @@ def normalize_position(position: str) -> str:
     value = value.replace(" ", "")
     return value
 
+def is_timeout_error(exc: Exception) -> bool:
+    return isinstance(exc, TimeoutError) or "timed out" in str(exc).lower()
+
+def fetch_with_retries(endpoint_class, **kwargs):
+    for attempt in range(1, NBA_API_RETRIES + 1):
+        try:
+            return endpoint_class(
+                headers=NBA_API_HEADERS,
+                timeout=NBA_API_TIMEOUT_SECONDS,
+                **kwargs,
+            )
+        except Exception as exc:
+            if not is_timeout_error(exc) or attempt == NBA_API_RETRIES:
+                raise
+
+            delay = NBA_API_RETRY_DELAY_SECONDS * attempt
+            print(
+                f"{endpoint_class.__name__} timed out "
+                f"(attempt {attempt}/{NBA_API_RETRIES}); retrying in {delay}s..."
+            )
+            time.sleep(delay)
+
 def main():
     season = get_current_season()
-
-    players_response = commonallplayers.CommonAllPlayers(
-        is_only_current_season=1,
-        league_id="00",
-        season=season,
-    )
-    players_df = players_response.get_data_frames()[0]
-
     output = []
 
-    for _, row in players_df.iterrows():
-        player_id = int(row["PERSON_ID"])
-        team_name = row["TEAM_NAME"]
-        player_name = row["DISPLAY_FIRST_LAST"]
-
-        if not team_name or team_name not in TEAM_META:
+    for team in nba_teams.get_teams():
+        team_name = team["nickname"]
+        if team_name not in TEAM_META:
             continue
 
         try:
-            info_response = commonplayerinfo.CommonPlayerInfo(player_id=player_id)
-            info_df = info_response.get_data_frames()[0]
-            info = info_df.iloc[0]
+            roster_response = fetch_with_retries(
+                commonteamroster.CommonTeamRoster,
+                team_id=team["id"],
+                season=season,
+            )
+            roster_df = roster_response.get_data_frames()[0]
+        except Exception as exc:
+            print(f"Skipping {team_name}: {exc}")
+            continue
 
-            jersey_raw = str(info.get("JERSEY", "")).strip()
-            jersey = int(jersey_raw) if jersey_raw.isdigit() else None
-
+        for _, row in roster_df.iterrows():
             player = {
-                "id": str(player_id),
-                "name": player_name,
+                "id": str(int(row["PLAYER_ID"])),
+                "name": row["PLAYER"],
                 "team": team_name,
                 "conference": TEAM_META[team_name]["conference"],
                 "division": TEAM_META[team_name]["division"],
-                "position": normalize_position(str(info.get("POSITION", ""))),
-                "heightInches": parse_height_to_inches(info.get("HEIGHT")),
-                "age": parse_age(info.get("BIRTHDATE")),
-                "jersey": jersey,
-                "imageUrl": f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id}.png",
+                "position": normalize_position(str(row.get("POSITION", ""))),
+                "heightInches": parse_height_to_inches(row.get("HEIGHT")),
+                "age": parse_age(row.get("BIRTH_DATE")),
+                "jersey": parse_jersey(row.get("NUM")),
+                "imageUrl": f"https://cdn.nba.com/headshots/nba/latest/1040x760/{int(row['PLAYER_ID'])}.png",
             }
 
             if (
@@ -123,10 +149,7 @@ def main():
             ):
                 output.append(player)
 
-            time.sleep(0.6)
-
-        except Exception as exc:
-            print(f"Skipping {player_name}: {exc}")
+        time.sleep(0.6)
 
     output.sort(key=lambda player: player["name"])
 
