@@ -384,15 +384,35 @@ const statusMessage = computed(() => {
 });
 
 const filteredPlayers = computed(() => {
-    const trimmedQuery = query.value.trim().toLowerCase();
+    const searchTerm = query.value.trim().toLowerCase();
+
+    if (!searchTerm || gameOver.value) {
+        return [];
+    }
 
     return players
         .filter((player) => !guessedIds.value.has(player.id))
-        .filter((player) => {
-            if (!trimmedQuery || gameOver.value) return false;
-            return player.name.toLowerCase().includes(trimmedQuery);
+        .map((player) => {
+            const normalizedName = player.name.toLowerCase();
+            const nameParts = normalizedName.split(/\s+/);
+
+            const rank = normalizedName.startsWith(searchTerm)
+                ? 0
+                : nameParts.some((part) => part.startsWith(searchTerm))
+                  ? 1
+                  : 2;
+
+            return {
+                player,
+                rank
+            };
         })
-        .slice(0, 8);
+        .filter(({ rank }) => rank < 2)
+        .sort((a, b) => {
+            return a.rank - b.rank || a.player.name.localeCompare(b.player.name);
+        })
+        .slice(0, 8)
+        .map(({ player }) => player);
 });
 
 const submitGuess = (player: NBAPlayer) => {

@@ -8,6 +8,8 @@ from nba_api.stats.endpoints import commonteamroster
 from nba_api.stats.library.http import STATS_HEADERS
 from nba_api.stats.static import teams as nba_teams
 
+TWO_WAY_IDS_PATH = Path("scripts/two_way_player_ids.json")
+
 NBA_API_HEADERS = STATS_HEADERS.copy()
 NBA_API_TIMEOUT_SECONDS = 90
 NBA_API_RETRIES = 3
@@ -108,8 +110,27 @@ def fetch_with_retries(endpoint_class, **kwargs):
             )
             time.sleep(delay)
 
+def load_two_way_player_ids() -> set[str]:
+    if not TWO_WAY_IDS_PATH.exists():
+        print("No two-way exclusion file found; no players will be excluded.")
+        return set()
+
+    try:
+        data = json.loads(TWO_WAY_IDS_PATH.read_text(encoding="utf-8"))
+
+        if not isinstance(data, list):
+            raise ValueError("Two-way player file must contain a JSON array.")
+
+        return {str(player_id) for player_id in data}
+
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Unable to read {TWO_WAY_IDS_PATH}: {exc}"
+        ) from exc
+
 def main():
     season = get_current_season()
+    two_way_player_ids = load_two_way_player_ids()
     output = []
 
     for team in nba_teams.get_teams():
@@ -129,6 +150,12 @@ def main():
             continue
 
         for _, row in roster_df.iterrows():
+            player_id = int(row["PLAYER_ID"])
+            player_id_string = str(player_id)
+
+            if player_id_string in two_way_player_ids:
+                continue
+
             player = {
                 "id": str(int(row["PLAYER_ID"])),
                 "name": row["PLAYER"],
